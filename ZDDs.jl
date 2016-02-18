@@ -62,7 +62,8 @@ export
 	tofamily,
 	print_size,
 	subset0,
-	subset1
+	subset1,
+	change
 	
 
 """
@@ -382,6 +383,9 @@ function subset1_sub(p::Node, v::Int)
 	end
 end
 
+"""
+
+"""
 function subset1(zdd::ZDD, v::Int)
 	return ZDD(subset1_sub(zdd.root, v))
 end
@@ -403,7 +407,7 @@ function subset0(zdd::ZDD, v::Int)
 	return ZDD(subset0_sub(zdd.root, v))
 end
 
-function change(p::Node, v)
+function change_sub(p::Node, v::Int)
 	if p.top < v
 		return getnode(v, false_terminal, p)
 	elseif p.top == v
@@ -411,9 +415,13 @@ function change(p::Node, v)
 	elseif p.top > v
 		return getnode(
 			p.top,
-			change(p.child0, v),
-			change(p.child1, v))
+			change_sub(p.child0, v),
+			change_sub(p.child1, v))
 	end
+end
+
+function change(zdd::ZDD, v::Int)
+	return ZDD(change_sub(zdd.root, v))
 end
 
 function union_sub(p::Node, q::Node)
