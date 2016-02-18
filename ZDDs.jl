@@ -361,12 +361,11 @@ function setdiff_sub(p::Node, q::Node)
 end
 
 """
-
+Returns the set of combinations which are in *p* and not in *q*.
 """
 function setdiff(p::ZDD, q::ZDD)
 	return ZDD(setdiff_sub(p.root, q.root))
 end
-
 
 function subset1_sub(p::Node, v::Int)
 	if p.top < v
@@ -384,7 +383,8 @@ function subset1_sub(p::Node, v::Int)
 end
 
 """
-
+Select the set of combinations including *v* from *zdd*,
+then delete *v* from them and return it.
 """
 function subset1(zdd::ZDD, v::Int)
 	return ZDD(subset1_sub(zdd.root, v))
@@ -403,6 +403,9 @@ function subset0_sub(p::Node, v::Int)
 	end
 end
 
+"""
+Select the combinations not including *v* from *zdd*.
+"""
 function subset0(zdd::ZDD, v::Int)
 	return ZDD(subset0_sub(zdd.root, v))
 end
@@ -420,6 +423,9 @@ function change_sub(p::Node, v::Int)
 	end
 end
 
+"""
+Inverts *v* on each combinations in *zdd*.
+"""
 function change(zdd::ZDD, v::Int)
 	return ZDD(change_sub(zdd.root, v))
 end
@@ -444,6 +450,9 @@ function union_sub(p::Node, q::Node)
 	end
 end
 
+"""
+Returns the union set of *p* and *q*.
+"""
 function union(p::ZDD, q::ZDD)
 	return ZDD(union_sub(p.root, q.root))
 end
@@ -462,6 +471,9 @@ function intersect_sub(p::Node, q::Node)
 	end
 end
 
+"""
+Returns the intersection set of *p* and *q*.
+"""
 function intersect(p::ZDD, q::ZDD)
 	return ZDD(intersect_sub(p.root, q.root))
 end
@@ -476,8 +488,11 @@ function length_sub(p::Node)
 	end
 end
 
-function length(p::ZDD)
-	return length_sub(p.root)
+"""
+Returns the number of combinations in *zdd*.
+"""
+function length(zdd::ZDD)
+	return length_sub(zdd.root)
 end
 
 end
