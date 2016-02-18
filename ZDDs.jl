@@ -18,6 +18,8 @@ The operations below are supported:
 
 example:
 ```julia
+julia> includes("ZDDs.jl")
+julia> using ZDDs
 julia> zdd1 = tozdd(((1), (1,2)))
 julia> zdd2 = tozdd(((2), (1,2), (2,3,4)))
 
