@@ -16,6 +16,25 @@ The operations below are supported:
 - union
 - setdiff
 
+example:
+```julia
+julia> zdd1 = tozdd(((1), (1,2)))
+julia> zdd2 = tozdd(((2), (1,2), (2,3,4)))
+
+julia> tofamily(union(zdd1, zdd2))
+Set([Set([1]),Set([2,1]),Set([2]),Set([4,2,3])])
+
+julia> tofamily(setdiff(zdd1, zdd2))
+Set([Set([1])])
+
+julia> tofamily(setdiff(zdd2, zdd1))
+Set([Set([2]),Set([4,2,3])])
+
+julia> tofamily(intersect(zdd1, zdd2))
+Set([Set([2,1])])
+```
+
+
 reference:
 Minato, S, 2001, Zero-suppressed BDDs and their applications, 
 International Journal on Software Tools for Technology
@@ -40,7 +59,9 @@ export
 	Family,
 	tofamily,
 	print_size,
-	union_tozdd
+	subset0,
+	subset1
+	
 
 """
 Node type
@@ -343,7 +364,8 @@ function setdiff(p::ZDD, q::ZDD)
 	return ZDD(setdiff_sub(p.root, q.root))
 end
 
-function subset1(p::Node, v::Int)
+
+function subset1_sub(p::Node, v::Int)
 	if p.top < v
 		return false_terminal
 	end
@@ -353,12 +375,16 @@ function subset1(p::Node, v::Int)
 	if p.top > v
 		return getnode(
 			p.top,
-			subset1(p.child0, v),
-			subset1(p.child1, v))
+			subset1_sub(p.child0, v),
+			subset1_sub(p.child1, v))
 	end
 end
 
-function subset0(p::Node, v)
+function subset1(zdd::ZDD, v::Int)
+	return ZDD(subset1_sub(zdd.root, v))
+end
+
+function subset0_sub(p::Node, v::Int)
 	if p.top < v
 		return p
 	elseif p.top == v
@@ -366,9 +392,13 @@ function subset0(p::Node, v)
 	elseif p.top > v
 		return getnode(
 			p.top,
-			subset0(p.child0, v),
-			subset0(p.child1, v))
+			subset0_sub(p.child0, v),
+			subset0_sub(p.child1, v))
 	end
+end
+
+function subset0(zdd::ZDD, v::Int)
+	return ZDD(subset0_sub(zdd.root, v))
 end
 
 function change(p::Node, v)
