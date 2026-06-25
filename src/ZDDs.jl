@@ -61,8 +61,9 @@ export
 	print_size,
 	subset0,
 	subset1,
-	change
-	
+	change,
+	clear_caches!
+
 
 """
 Node type
@@ -181,8 +182,8 @@ end
 Array with the position currently referenced.
 It is used in tozdd_sub! function.
 """
-mutable struct ArrayWithPos
-	parent::AbstractArray
+mutable struct ArrayWithPos{V <: AbstractVector{Int}}
+	parent::V
 	pos::Int
 end
 
@@ -311,56 +312,87 @@ isbase(zdd::ZDD) = isbase(zdd.root)
 
 isbase(p::Node) = p === true_terminal
 
-let
-	global getnode
-	global print_size
-	unique_table = Dict{Tuple{Int, Node, Node}, Node}()
-	"""
-	Generates node for given *top* value, *child0* and *child1* subgraph.
-	Using this method enables to keep each node unique.
-	"""
-	function getnode(top::Int, child0::Node, child1::Node)
-		if isempty(child1)
-			return child0
-		else
-			key = tuple(top, child0, child1)
-			if haskey(unique_table, key)
-				return unique_table[key]
-			else
-				node = Node(top, child0, child1)
-				unique_table[key] = node
-				return node
-			end
-		end
-	end
-	function print_size()
-		print(length(unique_table))
-		print("\n")
-	end
+# The unique (hash-cons) table keeps each node unique across the whole module.
+# Keying by the *content* of the tuple (and comparing *Node*s by *==*, which is
+# *===* for these mutable structs) gives correct identity-based sharing.
+const _unique_table = Dict{Tuple{Int, Node, Node}, Node}()
+
+# Operation caches (computed tables). Without them every recursive operation
+# degrades to time proportional to the number of PATHS (i.e. the number of
+# combinations, which is exponential) instead of the number of NODES.
+# Plain *Dict* (NOT *IdDict*) is required: it hashes the tuple key by content
+# and compares the contained *Node*s with *==* (which is *===* here), giving
+# correct identity keying. *IdDict* would key by the freshly-allocated tuple's
+# object identity and never hit.
+const _union_cache     = Dict{Tuple{Node, Node}, Node}()
+const _intersect_cache = Dict{Tuple{Node, Node}, Node}()
+const _setdiff_cache   = Dict{Tuple{Node, Node}, Node}()
+const _subset0_cache   = Dict{Tuple{Node, Int}, Node}()
+const _subset1_cache   = Dict{Tuple{Node, Int}, Node}()
+const _change_cache    = Dict{Tuple{Node, Int}, Node}()
+const _length_cache    = Dict{Node, Int}()
+
+"""
+Generates node for given *top* value, *child0* and *child1* subgraph.
+Using this method enables to keep each node unique.
+"""
+function getnode(top::Int, child0::Node, child1::Node)
+	isempty(child1) && return child0
+	return get!(() -> Node(top, child0, child1), _unique_table, (top, child0, child1))
+end
+
+function print_size()
+	print(length(_unique_table))
+	print("\n")
+end
+
+"""
+Empty every internal cache (the unique/hash-cons table and all operation
+caches), reclaiming the memory they hold.
+
+WARNING: After calling this, do NOT operate on any ZDD that was built before
+the clear. Clearing the unique table invalidates node identity/sharing, so
+operations mixing pre- and post-clear nodes can produce incorrect results.
+Only call *clear_caches!* between independent computations.
+"""
+function clear_caches!()
+	empty!(_unique_table)
+	empty!(_union_cache)
+	empty!(_intersect_cache)
+	empty!(_setdiff_cache)
+	empty!(_subset0_cache)
+	empty!(_subset1_cache)
+	empty!(_change_cache)
+	empty!(_length_cache)
+	return nothing
 end
 
 """
 
 """
 function setdiff_sub(p::Node, q::Node)
+	# Terminal / short-circuit cases are O(1); keep them before the cache.
 	if isempty(p) | isempty(q)
 		return p
 	elseif p === q
 		return false_terminal
-	elseif isbase(p)
-		return setdiff_sub(p, q.child0)
-	elseif isbase(q)
-		return getnode(p.top, setdiff_sub(p.child0, q), p.child1)
-	elseif p.top > q.top
-		return getnode(p.top, setdiff_sub(p.child0, q), p.child1)
-	elseif p.top < q.top
-		return setdiff_sub(p, q.child0)
-	else
-		# p.top == q.top
-		return getnode(
-			p.top,
-			setdiff_sub(p.child0, q.child0),
-			setdiff_sub(p.child1, q.child1))
+	end
+	return get!(_setdiff_cache, (p, q)) do
+		if isbase(p)
+			return setdiff_sub(p, q.child0)
+		elseif isbase(q)
+			return getnode(p.top, setdiff_sub(p.child0, q), p.child1)
+		elseif p.top > q.top
+			return getnode(p.top, setdiff_sub(p.child0, q), p.child1)
+		elseif p.top < q.top
+			return setdiff_sub(p, q.child0)
+		else
+			# p.top == q.top
+			return getnode(
+				p.top,
+				setdiff_sub(p.child0, q.child0),
+				setdiff_sub(p.child1, q.child1))
+		end
 	end
 end
 
@@ -374,6 +406,8 @@ end
 function subset1_sub(p::Node, v::Int)
 	# A terminal node holds no combination containing *v*,
 	# so the selected (and *v*-removed) family is empty.
+	# These cases (and the comparisons against *v*) are O(1); keep them before
+	# the cache and only memoize the recursive descent.
 	if isempty(p) || isbase(p)
 		return false_terminal
 	elseif p.top < v
@@ -381,10 +415,12 @@ function subset1_sub(p::Node, v::Int)
 	elseif p.top == v
 		return p.child1
 	else # p.top > v
-		return getnode(
-			p.top,
-			subset1_sub(p.child0, v),
-			subset1_sub(p.child1, v))
+		return get!(_subset1_cache, (p, v)) do
+			getnode(
+				p.top,
+				subset1_sub(p.child0, v),
+				subset1_sub(p.child1, v))
+		end
 	end
 end
 
@@ -399,6 +435,8 @@ end
 function subset0_sub(p::Node, v::Int)
 	# A terminal node holds no combination containing *v*,
 	# so every combination it represents is kept unchanged.
+	# These cases (and the comparisons against *v*) are O(1); keep them before
+	# the cache and only memoize the recursive descent.
 	if isempty(p) || isbase(p)
 		return p
 	elseif p.top < v
@@ -406,10 +444,12 @@ function subset0_sub(p::Node, v::Int)
 	elseif p.top == v
 		return p.child0
 	else # p.top > v
-		return getnode(
-			p.top,
-			subset0_sub(p.child0, v),
-			subset0_sub(p.child1, v))
+		return get!(_subset0_cache, (p, v)) do
+			getnode(
+				p.top,
+				subset0_sub(p.child0, v),
+				subset0_sub(p.child1, v))
+		end
 	end
 end
 
@@ -424,6 +464,8 @@ function change_sub(p::Node, v::Int)
 	# Toggling *v* over the empty family yields the empty family.
 	# (The base terminal is handled by the *p.top < v* branch below, since
 	#  *true_terminal.top == typemin(Int)*, turning {∅} into {{v}}.)
+	# The empty and *p.top <= v* cases are O(1); only the recursive descent
+	# (*p.top > v*) is memoized.
 	if isempty(p)
 		return p
 	elseif p.top < v
@@ -431,10 +473,12 @@ function change_sub(p::Node, v::Int)
 	elseif p.top == v
 		return getnode(v, p.child1, p.child0)
 	else # p.top > v
-		return getnode(
-			p.top,
-			change_sub(p.child0, v),
-			change_sub(p.child1, v))
+		return get!(_change_cache, (p, v)) do
+			getnode(
+				p.top,
+				change_sub(p.child0, v),
+				change_sub(p.child1, v))
+		end
 	end
 end
 
@@ -446,22 +490,26 @@ function change(zdd::ZDD, v::Int)
 end
 
 function union_sub(p::Node, q::Node)
+	# Terminal / short-circuit cases are O(1); keep them before the cache.
 	if isempty(p)
 		return q
 	elseif isempty(q)
 		return p
 	elseif p === q
 		return p
-	elseif isbase(q)
-		return getnode(p.top, union_sub(p.child0, q), p.child1)
-	elseif isbase(p)
-		return getnode(q.top, union_sub(p, q.child0), q.child1)
-	elseif p.top > q.top
-		return getnode(p.top, union_sub(p.child0, q), p.child1)
-	elseif p.top < q.top
-		return getnode(q.top, union_sub(p, q.child0), q.child1)
-	else
-		return getnode(p.top, union_sub(p.child0, q.child0), union_sub(p.child1, q.child1))
+	end
+	return get!(_union_cache, (p, q)) do
+		if isbase(q)
+			return getnode(p.top, union_sub(p.child0, q), p.child1)
+		elseif isbase(p)
+			return getnode(q.top, union_sub(p, q.child0), q.child1)
+		elseif p.top > q.top
+			return getnode(p.top, union_sub(p.child0, q), p.child1)
+		elseif p.top < q.top
+			return getnode(q.top, union_sub(p, q.child0), q.child1)
+		else
+			return getnode(p.top, union_sub(p.child0, q.child0), union_sub(p.child1, q.child1))
+		end
 	end
 end
 
@@ -473,16 +521,20 @@ function union(p::ZDD, q::ZDD)
 end
 
 function intersect_sub(p::Node, q::Node)
+	# Terminal / short-circuit cases are O(1); keep them before the cache.
 	if isempty(p) | isempty(q)
 		return false_terminal
 	elseif p === q
 		return p
-	elseif p.top > q.top
-		return intersect_sub(p.child0, q)
-	elseif p.top < q.top
-		return intersect_sub(p, q.child0)
-	elseif p.top == q.top
-		return getnode(p.top, intersect_sub(p.child0, q.child0), intersect_sub(p.child1, q.child1))
+	end
+	return get!(_intersect_cache, (p, q)) do
+		if p.top > q.top
+			return intersect_sub(p.child0, q)
+		elseif p.top < q.top
+			return intersect_sub(p, q.child0)
+		else # p.top == q.top
+			return getnode(p.top, intersect_sub(p.child0, q.child0), intersect_sub(p.child1, q.child1))
+		end
 	end
 end
 
@@ -494,17 +546,24 @@ function intersect(p::ZDD, q::ZDD)
 end
 
 function length_sub(p::Node)
+	# Terminal cases are O(1); keep them before the cache.
 	if isempty(p)
 		return 0
 	elseif isbase(p)
 		return 1
 	else
-		return length_sub(p.child0) + length_sub(p.child1)
+		return get!(_length_cache, p) do
+			length_sub(p.child0) + length_sub(p.child1)
+		end
 	end
 end
 
 """
-Returns the number of combinations in *zdd*.
+Returns the number of combinations in *zdd* as an *Int*.
+
+Thanks to memoization the count runs in time proportional to the number of
+NODES, not the number of combinations. Note that the result is an *Int* and may
+overflow for families with more than 2^63 combinations.
 """
 function length(zdd::ZDD)
 	return length_sub(zdd.root)

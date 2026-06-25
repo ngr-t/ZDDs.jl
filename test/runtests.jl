@@ -82,4 +82,18 @@ normfam(family) = Set(Set(Int.(s)) for s in family)
         end
     end
 
+    @testset "operation cache (power-set, perf regression)" begin
+        # Build the power-set ZDD of {1..50}. The ZDD has only ~50 nodes, but
+        # it represents 2^50 combinations. Without the operation cache, both the
+        # repeated *union*/*change* construction and *length* would each take
+        # time proportional to 2^50 recursive calls and never finish. With the
+        # computed table this is instant. This both demonstrates and guards the
+        # memoization fix.
+        p = tozdd([Int[]])
+        for i in 1:50
+            p = union(p, change(p, i))
+        end
+        @test length(p) == 2^50  # 1125899906842624
+    end
+
 end
