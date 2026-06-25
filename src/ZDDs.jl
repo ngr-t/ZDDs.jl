@@ -18,10 +18,9 @@ The operations below are supported:
 
 example:
 ```julia
-julia> includes("ZDDs.jl")
 julia> using ZDDs
-julia> zdd1 = tozdd(((1), (1,2)))
-julia> zdd2 = tozdd(((2), (1,2), (2,3,4)))
+julia> zdd1 = tozdd(((1,), (1, 2)))
+julia> zdd2 = tozdd(((2,), (1, 2), (2, 3, 4)))
 
 julia> tofamily(union(zdd1, zdd2))
 Set([Set([1]),Set([2,1]),Set([2]),Set([4,2,3])])
@@ -58,7 +57,6 @@ export
 	setdiff,
 	intersect,
 	union,
-	Family,
 	tofamily,
 	print_size,
 	subset0,
@@ -76,7 +74,7 @@ Node type has 3 fields:
 - child0::Node
 - child1::Node
 """
-type Node
+mutable struct Node
 	# label value 
 	top::Int
 	# reference to the root node of the partial graph
@@ -90,6 +88,7 @@ type Node
 		new_node = new()
 		new_node.child0 = new_node
 		new_node.child1 = new_node
+		return new_node
 	end
 	"""
 	This constructor makes an instance with circular references to itself.
@@ -100,6 +99,7 @@ type Node
 		new_node.top = top
 		new_node.child0 = new_node
 		new_node.child1 = new_node
+		return new_node
 	end
 
 	"""
@@ -134,7 +134,7 @@ const false_terminal = Node(typemax(Int))
 """
 ZDD type
 """
-type ZDD
+mutable struct ZDD
 	root::Node
 end
 
@@ -181,7 +181,7 @@ end
 Array with the position currently referenced.
 It is used in tozdd_sub! function.
 """
-type ArrayWithPos
+mutable struct ArrayWithPos
 	parent::AbstractArray
 	pos::Int
 end
@@ -251,8 +251,8 @@ function tozdd_sub!(family)
 	# and that in *family[f:length(family)]* includes *top*.
 
 	# Create *SubArray*s.
-	f0 = sub(family, 1:f-1)
-	f1 = sub(family, f:length(family))
+	f0 = view(family, 1:f-1)
+	f1 = view(family, f:length(family))
 
 	# Increment every *pos* of *s*s in *f1*.
 	# After the incrementation, the values in *arr* with index larger than *pos*
@@ -283,12 +283,16 @@ function tozdd(family)
 	# Sort every set in *family* at first.
 	# Because the max values of each set are repeatedly calculated,
 	# it's more efficient to sort them at first.
-	function preprocess_set(s)
-		return ArrayWithPos(sort!(unique(s), rev=true), 1)
+	# Each set is reduced to its canonical sorted (descending) representation
+	# with duplicate elements removed.
+	function canonical_set(s)
+		return sort!(unique(s), rev=true)
 	end
 
 	# *tozdd_sub!* assumes *family* does not contain duplication.
-	preprocessed_family = unique(map(preprocess_set, family))
+	# Deduplicate on the canonical *Vector{Int}* representation (which compares
+	# by value) before wrapping them in *ArrayWithPos* (which does not).
+	preprocessed_family = map(s -> ArrayWithPos(s, 1), unique(map(canonical_set, family)))
 	root = tozdd_sub!(preprocessed_family)
 	return ZDD(root)
 end
@@ -298,14 +302,14 @@ Returns true if zdd is an empty set.
 """
 isempty(zdd::ZDD) = isempty(zdd.root)
 
-isempty(p::Node) = is(p, false_terminal)
+isempty(p::Node) = p === false_terminal
 
 """
 Returns true if zdd is a base set.
 """
 isbase(zdd::ZDD) = isbase(zdd.root)
 
-isbase(p::Node) = is(p, true_terminal)
+isbase(p::Node) = p === true_terminal
 
 let
 	global getnode
@@ -341,7 +345,7 @@ end
 function setdiff_sub(p::Node, q::Node)
 	if isempty(p) | isempty(q)
 		return p
-	elseif is(p, q)
+	elseif p === q
 		return false_terminal
 	elseif isbase(p)
 		return setdiff_sub(p, q.child0)
@@ -368,13 +372,15 @@ function setdiff(p::ZDD, q::ZDD)
 end
 
 function subset1_sub(p::Node, v::Int)
-	if p.top < v
+	# A terminal node holds no combination containing *v*,
+	# so the selected (and *v*-removed) family is empty.
+	if isempty(p) || isbase(p)
 		return false_terminal
-	end
-	if p.top == v
+	elseif p.top < v
+		return false_terminal
+	elseif p.top == v
 		return p.child1
-	end
-	if p.top > v
+	else # p.top > v
 		return getnode(
 			p.top,
 			subset1_sub(p.child0, v),
@@ -391,11 +397,15 @@ function subset1(zdd::ZDD, v::Int)
 end
 
 function subset0_sub(p::Node, v::Int)
-	if p.top < v
+	# A terminal node holds no combination containing *v*,
+	# so every combination it represents is kept unchanged.
+	if isempty(p) || isbase(p)
+		return p
+	elseif p.top < v
 		return p
 	elseif p.top == v
 		return p.child0
-	elseif p.top > v
+	else # p.top > v
 		return getnode(
 			p.top,
 			subset0_sub(p.child0, v),
@@ -411,11 +421,16 @@ function subset0(zdd::ZDD, v::Int)
 end
 
 function change_sub(p::Node, v::Int)
-	if p.top < v
+	# Toggling *v* over the empty family yields the empty family.
+	# (The base terminal is handled by the *p.top < v* branch below, since
+	#  *true_terminal.top == typemin(Int)*, turning {∅} into {{v}}.)
+	if isempty(p)
+		return p
+	elseif p.top < v
 		return getnode(v, false_terminal, p)
 	elseif p.top == v
 		return getnode(v, p.child1, p.child0)
-	elseif p.top > v
+	else # p.top > v
 		return getnode(
 			p.top,
 			change_sub(p.child0, v),
@@ -435,7 +450,7 @@ function union_sub(p::Node, q::Node)
 		return q
 	elseif isempty(q)
 		return p
-	elseif is(p, q)
+	elseif p === q
 		return p
 	elseif isbase(q)
 		return getnode(p.top, union_sub(p.child0, q), p.child1)
@@ -460,7 +475,7 @@ end
 function intersect_sub(p::Node, q::Node)
 	if isempty(p) | isempty(q)
 		return false_terminal
-	elseif is(p, q)
+	elseif p === q
 		return p
 	elseif p.top > q.top
 		return intersect_sub(p.child0, q)

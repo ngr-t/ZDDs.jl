@@ -1,0 +1,7 @@
+# Julia（ライブラリのため Manifest はコミットしない）
+Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/docs/build/
+.DS_Store
